@@ -1,0 +1,54 @@
+stages:
+  - build
+  - test
+  - release
+
+variables:
+  DOCKER_HOST: tcp://shared-docker-builder.example.net:2375
+  GIT_REF_DEFAULT: master
+
+services:
+  - docker:dind
+
+before_script:
+  - >-
+    [[ -n "$CI_COMMIT_TAG" ]]
+    && GIT_REF_SLUG="$(git branch -a --contains ${CI_COMMIT_TAG} | grep '^  remotes/origin/release-' | tail -c+18)"
+    || GIT_REF_SLUG="$CI_COMMIT_REF_SLUG"
+  - export GIT_REF_SLUG
+  - >-
+    [[ $CI_COMMIT_REF_NAME = $GIT_REF_DEFAULT ]]
+    && CONTAINER_REPO="$CI_REGISTRY_IMAGE"
+    || CONTAINER_REPO="$CI_REGISTRY_IMAGE/$GIT_REF_SLUG"
+  - export CONTAINER_REPO
+  - export CONTAINER_IMAGE="$CONTAINER_REPO:latest"
+  - export CONTAINER_RELEASE_IMAGE="$CONTAINER_REPO:$CI_COMMIT_TAG"
+
+build images:
+  stage: build
+  script:
+    - docker pull ${CONTAINER_IMAGE}-dev || true
+    - docker pull ${CONTAINER_IMAGE} || true
+    - docker build --cache-from ${CONTAINER_IMAGE}-dev --cache-from ${CONTAINER_IMAGE} --target dev -t ${CONTAINER_IMAGE}-dev .
+    - docker build --target app -t ${CONTAINER_IMAGE} .
+
+run tests:
+  stage: test
+  script:
+    - docker run --rm ${CONTAINER_IMAGE} ./tests.sh
+
+push images:
+  stage: release
+  script:
+    - docker push ${CONTAINER_IMAGE}
+    - docker push ${CONTAINER_IMAGE}-dev
+  only:
+    - branches
+
+tag release images:
+  stage: release
+  script:
+    - docker tag ${CONTAINER_IMAGE} ${CONTAINER_RELEASE_IMAGE}
+    - docker push ${CONTAINER_RELEASE_IMAGE}
+  only:
+    - tags
